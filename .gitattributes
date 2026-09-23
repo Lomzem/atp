@@ -1,0 +1,11 @@
+* text=auto
+
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+Cargo.lock text eol=lf
+.gitignore text eol=lf
+
+# The log fixtures are compared byte for byte by the parser tests, and the
+# same checkout is used from Windows and from WSL.
+tests/fixtures/logs/*.log text eol=lf

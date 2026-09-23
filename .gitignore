@@ -1,0 +1,10 @@
+/target
+
+# atp writes its build log into the configuration's output directory, so this
+# name can turn up anywhere a build has run.
+atp-build.log
+
+# Build output, should a real build ever be pointed at the fixture solution.
+/tests/fixtures/solution/app/Debug/
+/tests/fixtures/solution/app/Release/
+/tests/fixtures/solution/app/Release_to_application_partition/

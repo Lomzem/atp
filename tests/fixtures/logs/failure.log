@@ -1,0 +1,46 @@
+------ Build started: Project: app, Configuration: Debug ARM ------
+Build started.
+Project "app.cproj" (default targets):
+Target "PreBuildEvent" in file "C:\Program Files (x86)\Atmel\Studio\7.0\Vs\Avr.common.targets" from project "C:\work\app\app.cproj" (target "Build" depends on it):
+	Using "Exec" task from assembly "Microsoft.Build.Tasks.Core, Version=14.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a".
+	Task "Exec"
+		REM delete build_timestamp.o so build time is updated
+if exist src\common\build_timestamp.o (
+  del src\common\build_timestamp.o
+)
+	Done executing task "Exec".
+Done building target "PreBuildEvent" in project "app.cproj".
+Target "CoreBuild" in file "C:\Program Files (x86)\Atmel\Studio\7.0\Vs\Compiler.targets" from project "C:\work\app\app.cproj" (target "Build" depends on it):
+	Using "RunCompilerTask" task from assembly "C:\Program Files (x86)\Atmel\Studio\7.0\Extensions\Application\AvrGCC.dll".
+	Task "RunCompilerTask"
+		Building file: ../src/main.c
+		Building file: ../src/driver.c
+		../src/main.c: In function 'helper':
+C:\work\app\src\main.c(295,6): warning: unused variable 'unused' [-Wunused-variable]
+		  int unused = 0;
+		      ^~~~~~~~~~
+		../src/main.c: At top level:
+C:\work\app\src\main.c(299,5): warning: no previous prototype for 'broken' [-Wmissing-prototypes]
+		 int broken(void)
+		     ^~~~~~~~~~~~~~~~~~
+		../src/main.c: In function 'broken':
+C:\work\app\src\main.c(301,9): error: implicit declaration of function 'missing_function' [-Werror=implicit-function-declaration]
+		  return missing_function();
+		         ^~~~~~~~~~~~~~~~~~~~
+C:\work\app\src\main.c(301,2): warning: nested extern declaration of 'missing_function' [-Wnested-externs]
+		  return missing_function();
+		  ^~~~~~
+		At top level:
+C:\work\app\src\main.c(293,12): warning: 'helper' defined but not used [-Wunused-function]
+		 static int helper(void)
+		            ^~~~~~~~~~~~~~~~~~
+		cc1.exe: some warnings being treated as errors
+		make: *** [src/main.o] Error 1
+C:\work\app\Debug\Makefile(1946,1): error: recipe for target 'src/main.o' failed
+	Done executing task "RunCompilerTask" -- FAILED.
+Done building target "CoreBuild" in project "app.cproj" -- FAILED.
+Done building project "app.cproj" -- FAILED.
+
+Build FAILED.
+========== Build: 0 succeeded or up-to-date, 1 failed, 0 skipped ==========
+

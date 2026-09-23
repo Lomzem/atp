@@ -1,0 +1,10 @@
+[package]
+name = "atp"
+version = "0.1.0"
+edition = "2024"
+description = "Friendly command line builds for Atmel Studio projects, from Windows or WSL"
+
+[dependencies]
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"

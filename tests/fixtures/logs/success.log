@@ -1,0 +1,36 @@
+------ Build started: Project: app, Configuration: Debug ARM ------
+Build started.
+Project "app.cproj" (default targets):
+Target "PreBuildEvent" in file "C:\Program Files (x86)\Atmel\Studio\7.0\Vs\Avr.common.targets" from project "C:\work\app\app.cproj" (target "Build" depends on it):
+	Using "Exec" task from assembly "Microsoft.Build.Tasks.Core, Version=14.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a".
+	Task "Exec"
+		REM delete build_timestamp.o so build time is updated
+if exist src\common\build_timestamp.o (
+  del src\common\build_timestamp.o
+)
+	Done executing task "Exec".
+Done building target "PreBuildEvent" in project "app.cproj".
+Target "CoreBuild" in file "C:\Program Files (x86)\Atmel\Studio\7.0\Vs\Compiler.targets" from project "C:\work\app\app.cproj" (target "Build" depends on it):
+	Using "RunCompilerTask" task from assembly "C:\Program Files (x86)\Atmel\Studio\7.0\Extensions\Application\AvrGCC.dll".
+	Task "RunCompilerTask"
+		Building file: ../src/main.c
+		Building file: ../src/driver.c
+		   text	   data	    bss	    dec	    hex	filename
+		 135656	      0	  63048	 198704	  30830	app.elf
+C:\work\app\Debug\app.elf(0,0): warning: Command Line Exceeds Limit app.elf
+	Done executing task "RunCompilerTask".
+	Using "RunOutputFileVerifyTask" task from assembly "C:\Program Files (x86)\Atmel\Studio\7.0\Extensions\Application\AvrGCC.dll".
+	Task "RunOutputFileVerifyTask"
+				Program Memory Usage 	:	135656 bytes   25.9 % Full
+				Data Memory Usage 		:	63048 bytes   48.1 % Full
+				Warning: Memory Usage estimation may not be accurate if there are sections other than .text sections in ELF file
+	Done executing task "RunOutputFileVerifyTask".
+Done building target "CoreBuild" in project "app.cproj".
+Target "PostBuildEvent" skipped, due to false condition; ('$(PostBuildEvent)' != '') was evaluated as ('' != '').
+Target "Build" in file "C:\Program Files (x86)\Atmel\Studio\7.0\Vs\Avr.common.targets" from project "C:\work\app\app.cproj" (entry point):
+Done building target "Build" in project "app.cproj".
+Done building project "app.cproj".
+
+Build succeeded.
+========== Build: 1 succeeded or up-to-date, 0 failed, 0 skipped ==========
+

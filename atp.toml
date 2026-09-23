@@ -1,0 +1,11 @@
+# Every setting here is optional. A solution directory already describes its
+# own projects and configurations, so atp works without this file.
+# See README.md for the full list.
+
+# [defaults]
+# project = 'firmware'
+# configuration = 'Debug'
+
+# [projects.firmware]
+# description = 'Main application'
+# solution = 'C:\path\to\app.atsln'
