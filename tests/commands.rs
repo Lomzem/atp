@@ -86,9 +86,9 @@ impl Workspace {
     /// Runs atp in a directory, with the Studio stand-in already pointed at.
     fn run(&self, directory: &Path, arguments: &[&str]) -> Run {
         let output = Command::new(ATP)
-            .args(arguments)
             .arg("--studio")
             .arg(self.studio())
+            .args(arguments)
             .current_dir(directory)
             .env("NO_COLOR", "1")
             // Keep a real atp.toml in the user's own configuration directory
@@ -284,7 +284,7 @@ fn matches_a_configuration_whatever_its_case() {
     let workspace = Workspace::new();
     workspace.build_artifacts("Debug", &["elf"]);
     workspace
-        .run_here(&["output", "-c", "debug"])
+        .run_here(&["build", "-c", "debug", "-o"])
         .succeeded()
         .stdout_has("app.elf");
 }
@@ -314,10 +314,22 @@ fn passes_extra_arguments_through_to_the_backend() {
 }
 
 #[test]
+fn artifact_lookup_rejects_backend_arguments_without_rebuild() {
+    let workspace = Workspace::new();
+    workspace.build_artifacts("Debug", &["elf"]);
+    let run = workspace.run_here(&["build", "-c", "Debug", "-o", "--", "/verbosity:diag"]);
+    run.failed_with(2)
+        .stderr_has("backend arguments require -f");
+    assert!(run.stdout.is_empty());
+}
+
+#[test]
 fn rebuild_and_clean_use_their_own_switches() {
     let workspace = Workspace::new();
-    if let Some(run) = workspace.dry_run(&["build", "-c", "Debug", "--rebuild", "--dry-run"]) {
-        run.stdout_has("/Rebuild Debug");
+    for flag in ["--rebuild", "-f"] {
+        if let Some(run) = workspace.dry_run(&["build", "-c", "Debug", flag, "--dry-run"]) {
+            run.stdout_has("/Rebuild Debug");
+        }
     }
     if let Some(run) = workspace.dry_run(&["build", "-c", "Debug", "--clean", "--dry-run"]) {
         run.stdout_has("/Clean Debug");
@@ -329,7 +341,7 @@ fn prints_the_artifact_path_for_the_wanted_extension() {
     let workspace = Workspace::new();
     workspace.build_artifacts("Debug", &["elf", "bin", "hex"]);
 
-    let run = workspace.run_here(&["output", "-c", "Debug", "-e", "bin"]);
+    let run = workspace.run_here(&["build", "-c", "Debug", "-e", "bin"]);
     run.succeeded();
     let printed = run.stdout.trim();
     assert!(printed.ends_with("app.bin"), "printed {printed}");
@@ -340,7 +352,7 @@ fn prints_the_artifact_path_for_the_wanted_extension() {
 fn defaults_to_the_linked_image() {
     let workspace = Workspace::new();
     workspace.build_artifacts("Debug", &["elf", "bin"]);
-    let run = workspace.run_here(&["output", "-c", "Debug"]);
+    let run = workspace.run_here(&["build", "-c", "Debug", "-o"]);
     run.succeeded();
     assert!(run.stdout.trim().ends_with("app.elf"));
 }
@@ -349,68 +361,162 @@ fn defaults_to_the_linked_image() {
 fn takes_the_project_name_on_either_side_of_the_extension() {
     let workspace = Workspace::new();
     workspace.build_artifacts("Debug", &["elf"]);
-    // The shape the tool was asked for: atp output -e elf <project>
-    let first = workspace.run_here(&["output", "-c", "Debug", "-e", "elf", "app"]);
-    let second = workspace.run_here(&["output", "-c", "Debug", "app", "-e", "elf"]);
+    // Project selection works before or after the extension option.
+    let first = workspace.run_here(&["build", "-c", "Debug", "-e", "elf", "app"]);
+    let second = workspace.run_here(&["build", "-c", "Debug", "app", "-e", "elf"]);
     first.succeeded();
     second.succeeded();
     assert_eq!(first.stdout, second.stdout);
 }
 
 #[test]
-fn lists_every_artifact_in_a_useful_order() {
+fn prints_the_output_directory_before_it_exists() {
     let workspace = Workspace::new();
-    workspace.build_artifacts("Debug", &["map", "bin", "elf", "hex"]);
-    let run = workspace.run_here(&["output", "-c", "Debug", "--all"]);
+    let run = workspace.run_here(&["output", "-c", "release"]);
     run.succeeded();
+    let directory = Path::new(run.stdout.trim());
+    assert!(directory.is_absolute());
+    assert_eq!(directory, workspace.project_directory().join("Release"));
+    assert!(!directory.exists());
+    assert_eq!(run.stdout.lines().count(), 1);
+}
 
-    let extensions: Vec<String> = run
-        .lines()
-        .iter()
-        .filter_map(|line| Path::new(line).extension()?.to_str().map(str::to_string))
-        .collect();
-    assert_eq!(extensions, vec!["elf", "bin", "hex", "map"]);
+#[test]
+fn resolves_relative_output_and_explicit_config_paths_before_output_exists() {
+    let workspace = Workspace::new();
+    let project = workspace.project_directory().join("app.cproj");
+    let text = fs::read_to_string(&project).unwrap().replace(
+        r"$(MSBuildProjectDirectory)\$(Configuration)",
+        r"artifacts\$(Configuration)",
+    );
+    workspace.write("app/app.cproj", &text);
+    workspace.write(
+        "settings/atp.toml",
+        "[projects.firmware]\nsolution = '../app.atsln'\nconfiguration = 'Release'\n",
+    );
+
+    let run = workspace.run_here(&["--config-file", "settings/atp.toml", "output", "firmware"]);
+    run.succeeded();
+    let directory = Path::new(run.stdout.trim());
+    assert!(directory.is_absolute());
+    assert_eq!(
+        directory,
+        workspace.path.join("settings/../app/artifacts/Release")
+    );
+    assert!(!directory.exists());
+    assert_eq!(run.stdout.lines().count(), 1);
+}
+
+#[test]
+fn prints_the_directory_when_artifacts_exist() {
+    let workspace = Workspace::new();
+    workspace.build_artifacts("Debug", &["elf", "bin"]);
+    let run = workspace.run_here(&["output", "-c", "Debug"]);
+    run.succeeded();
+    assert_eq!(
+        Path::new(run.stdout.trim()),
+        workspace.project_directory().join("Debug")
+    );
+}
+
+#[test]
+fn rejects_removed_output_options() {
+    let workspace = Workspace::new();
+    for arguments in [
+        vec!["output", "--all"],
+        vec!["output", "--copy", "out"],
+        vec!["output", "-e", "elf"],
+        vec!["build", "--all"],
+        vec!["build", "--copy", "out"],
+    ] {
+        workspace.run_here(&arguments).failed_with(2);
+    }
 }
 
 #[test]
 fn says_what_was_built_when_the_wanted_file_is_missing() {
     let workspace = Workspace::new();
     workspace.build_artifacts("Debug", &["elf", "bin"]);
-    workspace
-        .run_here(&["output", "-c", "Debug", "-e", "srec"])
-        .failed_with(2)
+    let run = workspace.run_here(&["build", "-c", "Debug", "-e", "srec"]);
+    run.failed_with(2)
         .stderr_has("produced no .srec file")
         .stderr_has("elf, bin");
+    assert!(run.stdout.is_empty());
 }
 
 #[test]
 fn says_when_nothing_has_been_built_yet() {
     let workspace = Workspace::new();
-    workspace
-        .run_here(&["output", "-c", "Debug"])
-        .failed_with(1)
-        .stderr_has("has not been built yet");
+    let run = workspace.run_here(&["build", "-c", "Debug", "-o"]);
+    run.failed_with(1).stderr_has("has not been built yet");
+    assert!(run.stdout.is_empty());
 }
 
 #[test]
-fn copies_the_artifacts_somewhere_else() {
+fn defaults_to_elf_even_when_the_project_configures_another_extension() {
     let workspace = Workspace::new();
-    workspace.build_artifacts("Debug", &["elf", "bin"]);
-    let destination = workspace.solution_directory().join("out");
+    let project = workspace.project_directory().join("app.cproj");
+    let text = fs::read_to_string(&project).unwrap().replace(
+        "<OutputFileExtension>.elf</OutputFileExtension>",
+        "<OutputFileExtension>.hex</OutputFileExtension>",
+    );
+    workspace.write("app/app.cproj", &text);
+    workspace.build_artifacts("Debug", &["elf", "hex"]);
+    let run = workspace.run_here(&["build", "-c", "Debug", "-o"]);
+    run.succeeded();
+    assert_eq!(
+        Path::new(run.stdout.trim()),
+        workspace.project_directory().join("Debug/app.elf")
+    );
+}
 
+#[test]
+fn lookup_does_not_need_a_studio_installation() {
+    let workspace = Workspace::new();
+    workspace.build_artifacts("Debug", &["elf"]);
+    fs::remove_dir_all(workspace.studio()).unwrap();
     workspace
-        .run_here(&[
-            "output",
-            "-c",
-            "Debug",
-            "--all",
-            "--copy",
-            destination.to_str().unwrap(),
-        ])
-        .succeeded();
+        .run_here(&["build", "-c", "Debug", "-o"])
+        .succeeded()
+        .stdout_has("app.elf");
+}
 
-    assert!(destination.join("app.elf").is_file());
-    assert!(destination.join("app.bin").is_file());
+#[test]
+fn rebuild_lookup_dry_run_reserves_stdout_for_the_artifact() {
+    let workspace = Workspace::new();
+    workspace.build_artifacts("Debug", &["elf"]);
+    for flags in [vec!["-fo"], vec!["-f", "-e", "bin"]] {
+        let mut arguments = vec!["build", "-c", "Debug", "--dry-run"];
+        arguments.extend(flags);
+        if let Some(run) = workspace.dry_run(&arguments) {
+            assert!(run.stdout.is_empty(), "{}", run.stdout);
+            run.stderr_has("/Rebuild Debug")
+                .stderr_has("AtmelStudio.exe");
+        }
+    }
+}
+
+#[test]
+fn failed_rebuild_never_prints_an_existing_artifact() {
+    let workspace = Workspace::new();
+    workspace.build_artifacts("Debug", &["elf"]);
+    // The Studio stand-in cannot execute, even if the host supports builds.
+    let run = workspace.run_here(&["build", "-c", "Debug", "-fo"]);
+    run.failed_with(1);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    assert!(!run.stderr.is_empty());
+}
+
+#[test]
+fn clean_conflicts_with_artifact_lookup() {
+    let workspace = Workspace::new();
+    for flags in [vec!["-o"], vec!["-e", "elf"]] {
+        let mut arguments = vec!["build", "-c", "Debug", "--clean"];
+        arguments.extend(flags);
+        let run = workspace.run_here(&arguments);
+        run.failed_with(2);
+        assert!(run.stdout.is_empty());
+    }
 }
 
 #[test]
@@ -423,7 +529,7 @@ fn warns_when_the_artifacts_are_older_than_the_sources() {
     // Touching a source after the build is what makes the output stale.
     workspace.write("app/src/main.c", "int main(void) { return 0; }\n");
 
-    let run = workspace.run_here(&["output", "-c", "Debug"]);
+    let run = workspace.run_here(&["build", "-c", "Debug", "-o"]);
     run.succeeded()
         .stderr_has("older than the sources")
         // The path still has to be the only thing on stdout.
@@ -448,7 +554,7 @@ fn a_named_project_in_the_configuration_file_works_from_anywhere() {
 
     let elsewhere = workspace.solution_directory().join("elsewhere");
     workspace
-        .run(&elsewhere, &["output"])
+        .run(&elsewhere, &["build", "-o"])
         .succeeded()
         .stdout_has("app.elf");
     workspace
@@ -464,7 +570,7 @@ fn a_default_configuration_removes_the_need_for_the_option() {
     workspace.build_artifacts("Debug", &["elf"]);
     workspace.write("atp.toml", "[defaults]\nconfiguration = 'Debug'\n");
     workspace
-        .run_here(&["output"])
+        .run_here(&["build", "-o"])
         .succeeded()
         .stdout_has("app.elf");
     workspace

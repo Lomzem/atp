@@ -211,7 +211,8 @@ impl Project {
 
     /// Where a configuration writes its build output.
     pub(crate) fn output_directory(&self, configuration: &str) -> PathBuf {
-        PathBuf::from(self.expand(&self.output_directory, configuration))
+        self.directory()
+            .join(self.expand(&self.output_directory, configuration))
     }
 
     /// The base name shared by every artifact, without an extension.

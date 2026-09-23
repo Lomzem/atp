@@ -3,14 +3,14 @@
 //! Two backends produce the same report. Atmel Studio is the one that always
 //! works, because Atmel's makefile generator needs the Studio shell around it;
 //! it is a windowed program, so the only way to see anything is to make it
-//! write a log file and read that back. MSBuild is faster and streams its
-//! output, but on many installations its makefile generator fails with a null
+//! write a log file and read that back. MSBuild is faster and writes its log
+//! to the console, but on many installations its makefile generator fails with a null
 //! reference, so it stays opt-in.
 
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -199,6 +199,7 @@ pub(crate) fn run(
     paths: &Paths,
     installation: &Installation,
     quiet: bool,
+    artifact_output: bool,
 ) -> AppResult<Outcome> {
     paths.require_windows_programs()?;
 
@@ -221,6 +222,7 @@ pub(crate) fn run(
     let mut command = Command::new(native_program(paths, program));
     command.args(arguments);
     command.current_dir(working_directory(request));
+    configure_streams(&mut command, request.backend, artifact_output);
     if request.backend == Backend::MsBuild {
         // Atmel's targets import their tasks through this variable, which
         // Studio normally sets for its own process.
@@ -267,6 +269,18 @@ pub(crate) fn run(
         elapsed,
         exit_code,
     })
+}
+
+fn configure_streams(command: &mut Command, backend: Backend, artifact_output: bool) {
+    match backend {
+        Backend::Studio if artifact_output => {
+            command.stdout(io::stderr());
+        }
+        Backend::MsBuild => {
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        }
+        Backend::Studio => {}
+    }
 }
 
 /// Waits for Studio, showing the file it is compiling as the log grows.
@@ -372,6 +386,65 @@ fn msbuild(paths: &Paths) -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn noisy_command() -> Command {
+        if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "echo backend-stdout & echo backend-stderr 1>&2"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "echo backend-stdout; echo backend-stderr >&2"]);
+            command
+        }
+    }
+
+    #[test]
+    fn captures_both_msbuild_streams_for_the_log() {
+        let mut command = noisy_command();
+        configure_streams(&mut command, Backend::MsBuild, true);
+        let output = command.spawn().unwrap().wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "backend-stdout"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "backend-stderr"
+        );
+    }
+
+    #[test]
+    fn reserves_stdout_for_artifacts_only_when_requested() {
+        for artifact_output in [false, true] {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "builder::tests::studio_stream_probe",
+                    "--nocapture",
+                ])
+                .env("ATP_TEST_ARTIFACT_OUTPUT", artifact_output.to_string())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(stdout.contains("backend-stdout"), !artifact_output);
+            assert_eq!(stderr.contains("backend-stdout"), artifact_output);
+            assert!(stderr.contains("backend-stderr"));
+        }
+    }
+
+    #[test]
+    #[ignore = "subprocess helper for stream routing test"]
+    fn studio_stream_probe() {
+        let artifact_output = std::env::var("ATP_TEST_ARTIFACT_OUTPUT").unwrap() == "true";
+        let mut command = noisy_command();
+        configure_streams(&mut command, Backend::Studio, artifact_output);
+        assert!(command.status().unwrap().success());
+    }
 
     #[test]
     fn maps_actions_onto_both_backends() {

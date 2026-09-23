@@ -80,7 +80,7 @@ listed, again unless `--verbose` is given.
 | Task | Command |
 | --- | --- |
 | Build a configuration | `atp build -c Debug` |
-| Build every file again | `atp build -c Debug --rebuild` |
+| Build every file again | `atp build -c Debug -f` |
 | Delete the build output | `atp build -c Debug --clean` |
 | Show the whole build log | `atp build -c Debug --verbose` |
 | Print the command instead of running it | `atp build -c Debug --dry-run` |
@@ -89,38 +89,46 @@ listed, again unless `--verbose` is given.
 `atp` writes its log to `atp-build.log` in the configuration's output
 directory, and leaves it there for you to read.
 
-## Get the output file
+## Get an artifact or its directory
 
-A build leaves an `.elf` and a pile of other files beside it. `output` prints
-the path of one of them and nothing else:
+Build once, then use `-o` to print the absolute path of the existing `.elf`:
 
 ```text
-atp output -e elf
+atp build -c Release
+atp build -c Release -o
 ```
 
 ```text
-C:\work\app\app\Debug\app.elf
+C:\work\app\app\Release\app.elf
 ```
 
-That makes it usable in a pipeline:
-
-```text
-jog flash "$(atp output -e elf)"
-```
+`-e` selects another extension and implies artifact lookup. Lookup does not
+run a build. Add `-f`, an alias for `--rebuild`, to rebuild first:
 
 | Task | Command |
 | --- | --- |
-| Print the linked image | `atp output` |
-| Print one artifact | `atp output -e bin` |
-| List every artifact | `atp output --all` |
-| Copy the artifacts somewhere | `atp output --all --copy ./release` |
-| Name the project and configuration | `atp output -e elf app -c Release` |
+| Print the existing `.elf` path | `atp build -c Release -o` |
+| Print the existing `.bin` path | `atp build -c Release -e bin` |
+| Rebuild and print the `.elf` path | `atp build -c Release -fo` |
+| Rebuild and print the `.bin` path | `atp build -c Release -f -e bin` |
+| Name the project and configuration | `atp build app -c Release -o` |
+| Print the artifacts directory | `atp output -c Release` |
 
-Without `-e`, `output` prints the `.elf`. If the file you asked for is not
-there, `atp` says which files the configuration did produce.
+With `-o` or `-e`, stdout contains only the artifact path. Rebuild logs go
+to stderr, so the command works in a pipeline:
 
-When the artifacts are older than the sources, `atp` says so on stderr, so the
-note reaches you without disturbing a pipeline that only wants the path.
+```text
+jog flash "$(atp build -c Release -fo)"
+```
+
+`-o` defaults to `.elf`, even if the project configures another executable
+extension. Missing artifacts and failed rebuilds exit nonzero and print no
+path. If existing artifacts are older than the sources, lookup prints the
+path and warns on stderr. With `-fo --dry-run`, the command goes to stderr
+and stdout stays empty.
+
+`atp output` prints the absolute artifacts directory, even before it exists.
+The old `output -e`, `--all`, and `--copy` options are no longer supported.
 
 ## Choosing a project and a configuration
 
@@ -187,7 +195,7 @@ To print the user configuration directory and exit, run `atp --config-dir`.
 every path it passes to them. Paths it prints come back in Linux form:
 
 ```text
-$ atp output -e elf
+$ atp build -c Debug -o
 /mnt/c/work/app/app/Debug/app.elf
 ```
 

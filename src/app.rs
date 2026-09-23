@@ -70,6 +70,15 @@ struct Cli {
     command: Option<Commands>,
 }
 
+impl Cli {
+    fn artifact_output(&self) -> bool {
+        matches!(
+            &self.command,
+            Some(Commands::Build { output, extension, .. }) if *output || extension.is_some()
+        )
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum BackendChoice {
     /// AtmelStudio.exe, which is what the IDE itself runs.
@@ -95,8 +104,27 @@ enum Commands {
         project: Option<String>,
         #[arg(short = 'c', long, help = "Build configuration, such as Debug")]
         configuration: Option<String>,
-        #[arg(long, conflicts_with = "clean", help = "Build every file again")]
+        #[arg(
+            short = 'f',
+            long,
+            conflicts_with = "clean",
+            help = "Build every file again"
+        )]
         rebuild: bool,
+        #[arg(
+            short = 'o',
+            long,
+            conflicts_with = "clean",
+            help = "Print the existing .elf path; add -f to rebuild first"
+        )]
+        output: bool,
+        #[arg(
+            short = 'e',
+            long,
+            conflicts_with = "clean",
+            help = "Print an artifact path by extension; implies --output"
+        )]
+        extension: Option<String>,
         #[arg(long, help = "Delete the build output instead of building")]
         clean: bool,
         #[arg(
@@ -105,18 +133,12 @@ enum Commands {
         )]
         extra: Vec<String>,
     },
-    /// Print the path of a build artifact
+    /// Print the build artifacts directory, even if it does not exist
     Output {
         #[arg(help = "Project name, from atp.toml or from the solution")]
         project: Option<String>,
         #[arg(short = 'c', long, help = "Build configuration, such as Debug")]
         configuration: Option<String>,
-        #[arg(short = 'e', long, help = "File extension [default: elf]")]
-        extension: Option<String>,
-        #[arg(long, help = "List every artifact this configuration produced")]
-        all: bool,
-        #[arg(long, value_name = "DIR", help = "Copy the artifacts into a directory")]
-        copy: Option<PathBuf>,
     },
     /// List the projects atp can build
     Projects,
@@ -153,6 +175,8 @@ fn execute(cli: &Cli) -> AppResult<()> {
             project,
             configuration,
             rebuild,
+            output,
+            extension,
             clean,
             extra,
         } => {
@@ -168,14 +192,26 @@ fn execute(cli: &Cli) -> AppResult<()> {
                 project.as_deref(),
                 configuration.as_deref(),
             )?;
-            command_build(cli, &paths, &config, &target, action, extra)
+            let lookup = *output || extension.is_some();
+            if lookup && !rebuild && !extra.is_empty() {
+                return Err(AppError::Usage(
+                    "backend arguments require -f when looking up an artifact".into(),
+                ));
+            }
+            if !lookup || *rebuild {
+                command_build(cli, &paths, &config, &target, action, extra)?;
+                if cli.dry_run {
+                    return Ok(());
+                }
+            }
+            if lookup {
+                command_artifact(&target, extension.as_deref().unwrap_or("elf"))?;
+            }
+            Ok(())
         }
         Commands::Output {
             project,
             configuration,
-            extension,
-            all,
-            copy,
         } => {
             let target = Target::resolve(
                 cli,
@@ -184,7 +220,9 @@ fn execute(cli: &Cli) -> AppResult<()> {
                 project.as_deref(),
                 configuration.as_deref(),
             )?;
-            command_output(&target, extension.as_deref(), *all, copy.as_deref())
+            let directory = target.project.output_directory(&target.configuration);
+            println!("{}", directory.display());
+            Ok(())
         }
         Commands::Projects => command_projects(&config, &paths),
         Commands::Configs { project } => {
@@ -257,6 +295,9 @@ impl Located {
             )));
         }
 
+        let path = std::path::absolute(&path).map_err(|error| {
+            AppError::Runtime(format!("cannot resolve {}: {error}", path.display()))
+        })?;
         let (solution, project, project_name) = open(&path, inner_name.as_deref())?;
 
         // MSBuild can build a bare project file, Studio cannot.
@@ -408,6 +449,14 @@ fn command_build(
     action: Action,
     extra: &[String],
 ) -> AppResult<()> {
+    let artifact_output = cli.artifact_output();
+    let print_line = |message: std::fmt::Arguments<'_>| {
+        if artifact_output {
+            eprintln!("{message}");
+        } else {
+            println!("{message}");
+        }
+    };
     let style = style_for(cli);
     let installation = Installation::locate(
         paths,
@@ -432,19 +481,28 @@ fn command_build(
 
     if cli.dry_run {
         let argv = builder::command_line(&request, paths, &installation)?;
-        println!("{}", quote(&argv));
+        print_line(format_args!("{}", quote(&argv)));
         return Ok(());
     }
 
     if !cli.quiet {
-        println!("{} {}", style.cyan(&label(action.verb())), target.label());
+        print_line(format_args!(
+            "{} {}",
+            style.cyan(&label(action.verb())),
+            target.label()
+        ));
     }
 
-    let outcome = builder::run(&request, paths, &installation, cli.quiet)?;
+    let outcome = builder::run(&request, paths, &installation, cli.quiet, artifact_output)?;
     let working_directory = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     if cli.verbose {
-        print!("{}", fs::read_to_string(&outcome.log).unwrap_or_default());
+        let text = fs::read_to_string(&outcome.log).unwrap_or_default();
+        if artifact_output {
+            eprint!("{text}");
+        } else {
+            print!("{text}");
+        }
     }
 
     for line in report::render(
@@ -454,7 +512,7 @@ fn command_build(
         &working_directory,
         cli.verbose,
     ) {
-        println!("{line}");
+        print_line(format_args!("{line}"));
     }
 
     let seconds = outcome.elapsed.as_secs_f64();
@@ -464,26 +522,26 @@ fn command_build(
         plural(outcome.report.warnings(), "warning")
     );
 
-    if !outcome.report.succeeded {
-        println!(
+    if !outcome.report.succeeded || outcome.exit_code != Some(0) {
+        print_line(format_args!(
             "{} {} in {seconds:.1}s \u{2014} {counts}",
             style.red(&label("Failed")),
             target.label()
-        );
-        println!(
+        ));
+        print_line(format_args!(
             "{} {}",
             style.dim(&label("Log")),
             relative_to(&outcome.log, &working_directory)
-        );
+        ));
         if let Some(code) = outcome.exit_code
             && code == 0
         {
             // Studio reports success in its exit code even when nothing built.
-            println!(
+            print_line(format_args!(
                 "{} {}",
                 style.dim(&label("note")),
                 style.dim("Atmel Studio exited 0; the log is what decided this")
-            );
+            ));
         }
         return Err(AppError::Exit(1));
     }
@@ -497,99 +555,49 @@ fn command_build(
     } else {
         "Finished"
     };
-    println!(
+    print_line(format_args!(
         "{} {} in {seconds:.1}s \u{2014} {counts}",
         style.green(&label(verb)),
         target.label()
-    );
+    ));
 
     if action == Action::Clean {
         return Ok(());
     }
 
     if let (Some(program), Some(data)) = (outcome.report.program, outcome.report.data) {
-        println!(
+        print_line(format_args!(
             "{} Program {} B ({:.1}% full) \u{b7} Data {} B ({:.1}% full)",
             style.cyan(&label("Memory")),
             thousands(program.bytes),
             program.percent,
             thousands(data.bytes),
             data.percent
-        );
+        ));
     }
 
     let artifact = target
         .project
         .artifact(&target.configuration, target.project.default_extension());
     if let Ok(metadata) = fs::metadata(&artifact) {
-        println!(
+        print_line(format_args!(
             "{} {} ({})",
             style.cyan(&label("Output")),
             relative_to(&artifact, &working_directory),
             file_size(metadata.len())
-        );
+        ));
     }
 
     Ok(())
 }
 
-fn command_output(
-    target: &Target,
-    extension: Option<&str>,
-    all: bool,
-    copy: Option<&Path>,
-) -> AppResult<()> {
-    let configuration = &target.configuration;
-    let chosen: Vec<PathBuf> = if all {
-        let found = target.project.artifacts(configuration);
-        if found.is_empty() {
-            return Err(AppError::Runtime(format!(
-                "{} has not been built yet. Run atp build first.",
-                target.label()
-            )));
-        }
-        found
-    } else {
-        let extension = extension.unwrap_or_else(|| target.project.default_extension());
-        let path = target.project.artifact(configuration, extension);
-        if !path.is_file() {
-            return Err(missing(target, extension, &path));
-        }
-        vec![path]
-    };
-
-    if let Some(directory) = copy {
-        fs::create_dir_all(directory).map_err(|error| {
-            AppError::Runtime(format!("cannot create {}: {error}", directory.display()))
-        })?;
-        for path in &chosen {
-            let name = path.file_name().expect("an artifact always has a name");
-            let destination = directory.join(name);
-            fs::copy(path, &destination).map_err(|error| {
-                AppError::Runtime(format!("cannot copy {}: {error}", path.display()))
-            })?;
-            println!("{}", destination.display());
-        }
-        return Ok(());
+fn command_artifact(target: &Target, extension: &str) -> AppResult<()> {
+    let path = target.project.artifact(&target.configuration, extension);
+    if !path.is_file() {
+        return Err(missing(target, extension, &path));
     }
-
-    warn_if_stale(target, &chosen);
-
-    // A bare path per line keeps this usable in a pipeline; a person reading
-    // the terminal gets the sizes as well.
-    if all && io::stdout().is_terminal() {
-        for path in &chosen {
-            let size = fs::metadata(path)
-                .map(|metadata| file_size(metadata.len()))
-                .unwrap_or_default();
-            println!("{:>9}  {}", size, path.display());
-        }
-        return Ok(());
-    }
-
-    for path in &chosen {
-        println!("{}", path.display());
-    }
+    warn_if_stale(target, std::slice::from_ref(&path));
+    println!("{}", path.display());
     Ok(())
 }
 
@@ -745,7 +753,12 @@ fn command_configs(config: &Config, located: &Located) -> AppResult<()> {
 }
 
 fn style_for(cli: &Cli) -> Style {
-    let color = !cli.no_color && env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+    let terminal = if cli.artifact_output() {
+        io::stderr().is_terminal()
+    } else {
+        io::stdout().is_terminal()
+    };
+    let color = !cli.no_color && env::var_os("NO_COLOR").is_none() && terminal;
     Style::new(color)
 }
 
@@ -783,14 +796,14 @@ mod tests {
 
     #[test]
     fn accepts_the_project_name_on_either_side_of_the_option() {
-        let first = Cli::parse_from(["atp", "output", "-e", "elf", "app"]);
-        let second = Cli::parse_from(["atp", "output", "app", "-e", "elf"]);
+        let first = Cli::parse_from(["atp", "build", "-e", "elf", "app"]);
+        let second = Cli::parse_from(["atp", "build", "app", "-e", "elf"]);
         for cli in [first, second] {
-            let Some(Commands::Output {
+            let Some(Commands::Build {
                 project, extension, ..
             }) = cli.command
             else {
-                panic!("expected the output command");
+                panic!("expected the build command");
             };
             assert_eq!(project.as_deref(), Some("app"));
             assert_eq!(extension.as_deref(), Some("elf"));
