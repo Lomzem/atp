@@ -99,6 +99,7 @@ impl From<BackendChoice> for Backend {
 #[derive(Subcommand)]
 enum Commands {
     /// Build a configuration and report what the compiler said
+    #[command(visible_alias = "b")]
     Build {
         #[arg(help = "Project name, from atp.toml or from the solution")]
         project: Option<String>,

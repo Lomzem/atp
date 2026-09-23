@@ -86,6 +86,8 @@ listed, again unless `--verbose` is given.
 | Print the command instead of running it | `atp build -c Debug --dry-run` |
 | Pass extra arguments to the backend | `atp build -c Debug -- /verbosity:diag` |
 
+`b` is an alias for `build`, so `atp b -c release -fo` also works.
+
 `atp` writes its log to `atp-build.log` in the configuration's output
 directory, and leaves it there for you to read.
 
