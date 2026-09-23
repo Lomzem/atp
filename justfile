@@ -1,0 +1,104 @@
+set positional-arguments
+
+# List available commands.
+default:
+    @just --list
+
+# Tag HEAD with the Cargo version; use --force or -f to overwrite it.
+tag *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag=""
+    force=false
+    for arg in "$@"; do
+        case "$arg" in
+            --force|-f) force=true ;;
+            -*) echo "error: unknown option: $arg" >&2; exit 1 ;;
+            *)
+                [[ -z "$tag" ]] || {
+                    echo "error: usage: just tag [TAG] [--force|-f]" >&2
+                    exit 1
+                }
+                tag="$arg"
+                ;;
+        esac
+    done
+    version="$(sed -n '/^\[package\]$/,/^\[/{s/^version = "\([^"]*\)"$/\1/p;}' Cargo.toml)"
+    tag="${tag:-v$version}"
+    if [[ -z "$version" || "$tag" != "v$version" ]]; then
+        echo "error: tag must match Cargo.toml version: v$version" >&2
+        exit 1
+    fi
+    if [[ -n "$(git status --porcelain)" ]]; then
+        echo "error: commit or stash changes before tagging" >&2
+        exit 1
+    fi
+    git check-ref-format "refs/tags/$tag"
+    if [[ "$force" == true ]]; then
+        git tag --force -a "$tag" -m "Release $tag"
+        git push origin "+refs/tags/$tag:refs/tags/$tag"
+        exit 0
+    fi
+    if git show-ref --verify --quiet "refs/tags/$tag"; then
+        [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$(git rev-parse HEAD)" ]] || {
+            echo "error: existing tag points to a different commit; use --force to replace it" >&2
+            exit 1
+        }
+    else
+        git tag -a "$tag" -m "Release $tag"
+    fi
+    git push origin "refs/tags/$tag:refs/tags/$tag"
+
+# Release the Cargo version by default, waiting for its Build run to succeed.
+release tag="" run_id="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="$1"
+    run_id="$2"
+    if [[ -z "$tag" ]]; then
+        version="$(sed -n '/^\[package\]$/,/^\[/{s/^version = "\([^"]*\)"$/\1/p;}' Cargo.toml)"
+        [[ -n "$version" ]] || {
+            echo "error: Cargo package version was not found" >&2
+            exit 1
+        }
+        tag="v$version"
+    fi
+    git check-ref-format "refs/tags/$tag"
+    [[ "$tag" == v* && ( -z "$run_id" || "$run_id" =~ ^[0-9]+$ ) ]] || {
+        echo "error: provide a v-prefixed tag and, optionally, a numeric Actions run ID" >&2
+        exit 1
+    }
+    GH_REPO="$(git remote get-url origin)"
+    export GH_REPO
+    git fetch origin "refs/tags/$tag:refs/tags/$tag"
+    commit="$(git rev-parse "refs/tags/$tag^{commit}")"
+    if [[ -z "$run_id" ]]; then
+        echo "Looking for the Build run for $tag..."
+        for ((attempt = 1; attempt <= 12; attempt++)); do
+            run_id="$(gh run list --workflow build.yml --branch "$tag" --commit "$commit" \
+                --event push --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            [[ -z "$run_id" ]] || break
+            if ((attempt < 12)); then sleep 5; fi
+        done
+        [[ -n "$run_id" ]] || {
+            echo "error: no Build run found for $tag; check GitHub Actions and retry" >&2
+            exit 1
+        }
+    fi
+    echo "Waiting for Build run $run_id..."
+    gh run watch "$run_id" --exit-status --interval 10
+    run="$(gh run view "$run_id" --json headSha,status,conclusion,workflowName,event --jq '[.headSha, .status, .conclusion, .workflowName, .event] | join("|")')"
+    if [[ "$run" != "$commit|completed|success|Build|push" && "$run" != "$commit|completed|success|Build|workflow_dispatch" ]]; then
+        echo "error: run must be a successful Build push or manual run of the tagged commit" >&2
+        exit 1
+    fi
+    version="${tag#v}"
+    artifacts="$(mktemp -d)"
+    trap 'rm -rf -- "$artifacts"' EXIT
+    gh run download "$run_id" --dir "$artifacts" --name atp-windows-x86_64
+    asset="$artifacts/atp-$version-windows-x86_64.exe"
+    [[ -s "$asset" ]] || {
+        echo "error: missing or empty release asset: ${asset##*/}" >&2
+        exit 1
+    }
+    gh release create "$tag" "$asset" --verify-tag --generate-notes --title "$tag"

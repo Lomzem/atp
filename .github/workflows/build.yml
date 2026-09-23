@@ -1,0 +1,60 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Test and build Windows executable
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+
+      - name: Check release version
+        run: |
+          version="$(sed -n '/^\[package\]$/,/^\[/{s/^version = "\([^"]*\)"$/\1/p;}' Cargo.toml)"
+          if [[ -z "$version" ]]; then
+            echo "error: Cargo package version was not found" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "error: tag must match Cargo.toml version: v$version" >&2
+            exit 1
+          fi
+          echo "ATP_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: cargo +stable test --locked --target x86_64-pc-windows-msvc
+
+      - name: Build release executable
+        run: cargo +stable build --locked --release --target x86_64-pc-windows-msvc
+
+      - name: Package and check executable
+        run: |
+          mkdir -p dist
+          executable="dist/atp-$ATP_VERSION-windows-x86_64.exe"
+          cp target/x86_64-pc-windows-msvc/release/atp.exe "$executable"
+          "$executable" --version
+          "$executable" --help
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: atp-windows-x86_64
+          path: dist/atp-*-windows-x86_64.exe
+          if-no-files-found: error

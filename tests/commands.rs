@@ -401,7 +401,7 @@ fn resolves_relative_output_and_explicit_config_paths_before_output_exists() {
     assert!(directory.is_absolute());
     assert_eq!(
         directory,
-        workspace.path.join("settings/../app/artifacts/Release")
+        std::path::absolute(workspace.path.join("settings/../app/artifacts/Release")).unwrap()
     );
     assert!(!directory.exists());
     assert_eq!(run.stdout.lines().count(), 1);

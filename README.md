@@ -266,3 +266,25 @@ cargo test
 The tests need neither Atmel Studio nor hardware. They run on Windows and in
 WSL, and cover the log parser against real build logs kept in
 `tests/fixtures/logs`.
+
+## CI and releases
+
+The `Build` GitHub Actions workflow tests and builds the Windows x64 executable
+on every push and pull request. You can also start it manually. Download the
+`atp-windows-x86_64` artifact from a successful run and extract the `.exe`.
+
+Release commands require `just`, Bash, Git, and an authenticated GitHub CLI
+with access to the repository. Run them from WSL or Git Bash on Windows.
+
+1. Update the version in `Cargo.toml`, run `cargo check` to update `Cargo.lock`,
+   and commit the changes.
+2. Run `just tag` to create and push an annotated `v<version>` tag for `HEAD`.
+   The working tree must be clean.
+3. Run `just release` to wait for the tag's build and publish a GitHub release
+   with `atp-<version>-windows-x86_64.exe` and generated release notes.
+
+Use `just tag v0.1.0` to specify the tag. It must match `Cargo.toml`.
+`just tag --force` replaces the local and remote tag.
+Use `just release v0.1.0` to release an existing tag, or
+`just release v0.1.0 RUN_ID` to choose a successful push or manual build of
+that tag's commit. Run `just` to list the commands.
